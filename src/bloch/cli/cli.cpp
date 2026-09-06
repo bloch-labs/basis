@@ -23,13 +23,16 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
 #include "bloch/compiler/import/module_loader.hpp"
+#include "bloch/compiler/qasm/qasm3_emitter.hpp"
 #include "bloch/compiler/semantics/semantic_analyser.hpp"
 #include "bloch/runtime/runtime_evaluator.hpp"
 #include "bloch/support/error/bloch_error.hpp"
@@ -46,14 +49,16 @@ struct CliOption {
 
 static constexpr std::string_view kFlagHelp = "--help";
 static constexpr std::string_view kFlagVersion = "--version";
-static constexpr std::string_view kFlagEmitQasm = "--emit-qasm";
+static constexpr std::string_view kFlagEmitQasm2 = "--emit-qasm2";
+static constexpr std::string_view kFlagEmitQasm3 = "--emit-qasm3";
 static constexpr std::string_view kFlagShotsPrefix = "--shots=";
 static constexpr std::string_view kFlagEchoPrefix = "--echo=";
 
-static constexpr std::array<CliOption, 5> kCliOptions = {
+static constexpr std::array<CliOption, 6> kCliOptions = {
     CliOption{kFlagHelp, "", "Show this help and exit"},
     CliOption{kFlagVersion, "", "Print version and exit"},
-    CliOption{kFlagEmitQasm, "", "Print emitted QASM to stdout"},
+    CliOption{kFlagEmitQasm2, "", "Write OpenQASM 2 to <file>.qasm"},
+    CliOption{kFlagEmitQasm3, "", "Write OpenQASM 3 to <file>.qasm"},
     CliOption{"--shots", "=N", "Run the program N times and aggregate @tracked counts"},
     CliOption{"--echo", "=auto|all|none",
               "Control echo statements (default: auto; suppress when taking many shots)"},
@@ -82,7 +87,7 @@ void printHelp(const Context& ctx) {
                   << opt.description << "\n";
     }
     std::cout << "\nBehaviour:\n"
-              << "  - Writes <file>.qasm alongside the input file.\n"
+              << "  - QASM is written only when an --emit-qasm2 or --emit-qasm3 flag is used.\n"
               << "  - When --shots is used, prints an aggregate table of tracked values.\n"
               << std::endl;
 }
@@ -169,13 +174,27 @@ std::vector<std::string> resolveStdlibSearchPaths(const Context& ctx, const char
     return paths;
 }
 
+void write_qasm(const fs::path& input_path, std::string_view qasm) {
+    fs::path output_path = input_path;
+    output_path.replace_extension(".qasm");
+
+    std::ofstream output(output_path);
+    if (!output) {
+        throw std::runtime_error("could not open QASM output file: " + output_path.string());
+    }
+    output << qasm;
+    if (!output) {
+        throw std::runtime_error("could not write QASM output file: " + output_path.string());
+    }
+}
+
 int runImpl(int argc, char** argv, const Context& ctx) {
     if (argc < 2) {
         std::cerr << "Usage: bloch [options] <file.bloch> (use --help for details)\n";
         return 1;
     }
 
-    bool emitQasm = false;
+    std::optional<bloch::runtime::QasmVersion> qasm_version;
     int shots = 1;
     bool shotsProvided = false;
     bool isCliShots = false;
@@ -191,8 +210,15 @@ int runImpl(int argc, char** argv, const Context& ctx) {
         } else if (arg == kFlagVersion) {
             printVersion(ctx);
             return 0;
-        } else if (arg == kFlagEmitQasm) {
-            emitQasm = true;
+        } else if (arg == kFlagEmitQasm2 || arg == kFlagEmitQasm3) {
+            const auto requested_version = arg == kFlagEmitQasm2
+                                               ? bloch::runtime::QasmVersion::OpenQasm2
+                                               : bloch::runtime::QasmVersion::OpenQasm3;
+            if (qasm_version.has_value() && *qasm_version != requested_version) {
+                std::cerr << "--emit-qasm2 and --emit-qasm3 cannot be used together\n";
+                return 1;
+            }
+            qasm_version = requested_version;
         } else if (arg.rfind(kFlagShotsPrefix, 0) == 0) {
             isCliShots = true;
             cliShots = std::stoi(arg.substr(kFlagShotsPrefix.size()));
@@ -202,6 +228,9 @@ int runImpl(int argc, char** argv, const Context& ctx) {
             }
         } else if (arg.rfind(kFlagEchoPrefix, 0) == 0) {
             echoOpt = arg.substr(kFlagEchoPrefix.size());
+        } else if (arg.starts_with("--")) {
+            std::cerr << "Unknown option: " << arg << "\n";
+            return 1;
         } else {
             file = arg;
         }
@@ -242,20 +271,26 @@ int runImpl(int argc, char** argv, const Context& ctx) {
 
         bloch::compiler::SemanticAnalyser analyser;
         analyser.analyse(*program);
+        const bool emit_structured_qasm3 =
+            qasm_version.has_value() && *qasm_version == bloch::runtime::QasmVersion::OpenQasm3 &&
+            bloch::compiler::Qasm3Emitter::requires_structured_emission(*program);
+        const bool collect_qasm_trace = qasm_version.has_value() && !emit_structured_qasm3;
         std::string qasm;
         if (shotsProvided) {
             // Multi-shot execution: aggregate tracked values and report a summary.
             std::unordered_map<std::string, std::unordered_map<std::string, int>> aggregate;
             auto start = std::chrono::steady_clock::now();
             for (int s = 0; s < shots; ++s) {
-                bloch::runtime::RuntimeEvaluator evaluator(s == shots - 1);
+                const bool collect_qasm = collect_qasm_trace && s == shots - 1;
+                bloch::runtime::RuntimeEvaluator evaluator(collect_qasm);
                 evaluator.setEcho(echoAll);
                 // Suppress per-shot warnings; only show for last shot
                 if (s < shots - 1)
                     evaluator.setWarnOnExit(false);
                 evaluator.execute(*program);
-                if (s == shots - 1)
-                    qasm = evaluator.getQasm();
+                if (collect_qasm) {
+                    qasm = evaluator.getQasm(*qasm_version);
+                }
                 for (const auto& vk : evaluator.trackedCounts())
                     for (const auto& vv : vk.second)
                         aggregate[vk.first][vv.first] += vv.second;
@@ -263,11 +298,6 @@ int runImpl(int argc, char** argv, const Context& ctx) {
             auto end = std::chrono::steady_clock::now();
             double elapsed =
                 std::chrono::duration_cast<std::chrono::duration<double>>(end - start).count();
-            std::string base = file.substr(0, file.find_last_of('.'));
-            std::ofstream qfile(base + ".qasm");
-            qfile << qasm;
-            qfile.close();
-
             // Warn if nothing was tracked, but still print run header and timing
             if (aggregate.empty())
                 bloch::support::blochWarning(
@@ -316,23 +346,21 @@ int runImpl(int argc, char** argv, const Context& ctx) {
                     std::cout << "\n";
                 }
             }
-            if (emitQasm) {
-                std::cout << qasm;
-                return 0;
-            }
         } else {
-            bloch::runtime::RuntimeEvaluator evaluator;
+            bloch::runtime::RuntimeEvaluator evaluator(collect_qasm_trace);
             evaluator.setEcho(echoAll);
             evaluator.execute(*program);
-            qasm = evaluator.getQasm();
-            std::string base = file.substr(0, file.find_last_of('.'));
-            std::ofstream qfile(base + ".qasm");
-            qfile << qasm;
-            qfile.close();
-            if (emitQasm) {
-                std::cout << qasm;
-                return 0;
+            if (qasm_version.has_value()) {
+                if (collect_qasm_trace) {
+                    qasm = evaluator.getQasm(*qasm_version);
+                }
             }
+        }
+        if (emit_structured_qasm3) {
+            qasm = bloch::compiler::Qasm3Emitter{}.emit(*program);
+        }
+        if (qasm_version.has_value()) {
+            write_qasm(file, qasm);
         }
     } catch (const std::exception& ex) {
         // Print a clear stop message, then the actual error

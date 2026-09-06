@@ -132,7 +132,7 @@ std::string normalizeOutput(std::string result) {
 }
 
 std::string runBloch(const std::string& source, const std::string& name,
-                     const std::string& options = "") {
+                     const std::string& options = "", std::string* emitted_qasm = nullptr) {
     namespace fs = std::filesystem;
     fs::path cwd = fs::current_path();
     fs::path blochFile = cwd / name;
@@ -143,13 +143,16 @@ std::string runBloch(const std::string& source, const std::string& name,
     fs::path blochBin = findBlochBinary();
 
     std::string cmd = std::string("\"") + blochBin.string() + "\"";
+    cmd += std::string(" \"") + fs::absolute(blochFile).string() + "\"";
     if (!options.empty())
         cmd += " " + options;
-    cmd += std::string(" \"") + fs::absolute(blochFile).string() + "\" 2>&1";
+    cmd += " 2>&1";
     std::string result;
     // Redirect stdout/stderr to a file and read it back (more portable than popen on Windows)
     fs::path stem = blochFile.stem();
     fs::path outPath = cwd / (stem.string() + ".out");
+    fs::path qasm_path = cwd / (stem.string() + ".qasm");
+    fs::remove(qasm_path);
     std::string redirCmd = cmd + std::string(" > \"") + outPath.string() + "\" 2>&1";
     [[maybe_unused]] int rc = std::system(redirCmd.c_str());
     {
@@ -162,8 +165,17 @@ std::string runBloch(const std::string& source, const std::string& name,
 
     result = normalizeOutput(std::move(result));
 
+    if (emitted_qasm != nullptr) {
+        emitted_qasm->clear();
+        std::ifstream qasm_file(qasm_path);
+        if (qasm_file) {
+            emitted_qasm->assign(std::istreambuf_iterator<char>(qasm_file),
+                                 std::istreambuf_iterator<char>());
+        }
+    }
+
     fs::remove(blochFile);
-    fs::remove(cwd / (stem.string() + ".qasm"));
+    fs::remove(qasm_path);
     fs::remove(cwd / (stem.string() + ".out"));
     return result;
 }
@@ -207,9 +219,32 @@ TEST(IntegrationTest, HelpListsAllCliOptions) {
     std::string output = runBlochCommand("--help");
     EXPECT_NE(output.find("--help"), std::string::npos);
     EXPECT_NE(output.find("--version"), std::string::npos);
-    EXPECT_NE(output.find("--emit-qasm"), std::string::npos);
+    EXPECT_NE(output.find("--emit-qasm2"), std::string::npos);
+    EXPECT_NE(output.find("--emit-qasm3"), std::string::npos);
     EXPECT_NE(output.find("--shots"), std::string::npos);
     EXPECT_NE(output.find("--echo=auto|all|none"), std::string::npos);
+}
+
+TEST(IntegrationTest, EmitsQasmOnlyWhenRequested) {
+    const std::string source =
+        "function main() -> void { qubit control; qubit target; h(control); bit result = measure "
+        "control; if (result == 1b) { x(target); } else { h(target); } bit measured_target = "
+        "measure target; }";
+    std::string qasm;
+
+    EXPECT_EQ(runBloch(source, "no_qasm.bloch", "", &qasm), "");
+    EXPECT_TRUE(qasm.empty());
+
+    EXPECT_EQ(runBloch(source, "qasm2.bloch", "--emit-qasm2", &qasm), "");
+    EXPECT_NE(qasm.find("OPENQASM 2.0"), std::string::npos);
+    EXPECT_NE(qasm.find("measure q[0] -> c[0]"), std::string::npos);
+
+    EXPECT_EQ(runBloch(source, "qasm3.bloch", "--emit-qasm3", &qasm), "");
+    EXPECT_NE(qasm.find("OPENQASM 3.0"), std::string::npos);
+    EXPECT_NE(qasm.find("bit result = measure control"), std::string::npos);
+    EXPECT_NE(qasm.find("if (result == 1)"), std::string::npos);
+    EXPECT_NE(qasm.find("x target"), std::string::npos);
+    EXPECT_NE(qasm.find("h target"), std::string::npos);
 }
 
 #endif  // BLOCH_SKIP_INTEGRATION_TESTS

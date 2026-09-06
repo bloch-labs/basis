@@ -17,8 +17,8 @@
 #include <array>
 #include <cmath>
 #include <random>
-#include <sstream>
 #include <stdexcept>
+#include <string_view>
 
 namespace bloch::runtime {
 
@@ -71,14 +71,14 @@ void QasmSimulator::h(int q) {
                                                 1 / std::sqrt(2.0), -1 / std::sqrt(2.0)};
     applySingleQubitGate(q, m);
     if (m_logOps)
-        m_ops.emplace_back("h q[" + std::to_string(q) + "];\n");
+        operations_.push_back({OperationType::H, q, 0, 0.0});
 }
 
 void QasmSimulator::x(int q) {
     const std::array<std::complex<double>, 4> m{0, 1, 1, 0};
     applySingleQubitGate(q, m);
     if (m_logOps)
-        m_ops.emplace_back("x q[" + std::to_string(q) + "];\n");
+        operations_.push_back({OperationType::X, q, 0, 0.0});
 }
 
 void QasmSimulator::y(int q) {
@@ -86,14 +86,14 @@ void QasmSimulator::y(int q) {
                                                 std::complex<double>(0, 1), 0.0};
     applySingleQubitGate(q, m);
     if (m_logOps)
-        m_ops.emplace_back("y q[" + std::to_string(q) + "];\n");
+        operations_.push_back({OperationType::Y, q, 0, 0.0});
 }
 
 void QasmSimulator::z(int q) {
     const std::array<std::complex<double>, 4> m{1.0, 0.0, 0.0, -1.0};
     applySingleQubitGate(q, m);
     if (m_logOps)
-        m_ops.emplace_back("z q[" + std::to_string(q) + "];\n");
+        operations_.push_back({OperationType::Z, q, 0, 0.0});
 }
 
 void QasmSimulator::rx(int q, double t) {
@@ -103,7 +103,7 @@ void QasmSimulator::rx(int q, double t) {
                                                 std::complex<double>(0, -st), ct};
     applySingleQubitGate(q, m);
     if (m_logOps)
-        m_ops.emplace_back("rx(" + std::to_string(t) + ") q[" + std::to_string(q) + "];\n");
+        operations_.push_back({OperationType::Rx, q, 0, t});
 }
 
 void QasmSimulator::ry(int q, double t) {
@@ -112,7 +112,7 @@ void QasmSimulator::ry(int q, double t) {
     const std::array<std::complex<double>, 4> m{ct, -st, st, ct};
     applySingleQubitGate(q, m);
     if (m_logOps)
-        m_ops.emplace_back("ry(" + std::to_string(t) + ") q[" + std::to_string(q) + "];\n");
+        operations_.push_back({OperationType::Ry, q, 0, t});
 }
 
 void QasmSimulator::rz(int q, double t) {
@@ -121,7 +121,7 @@ void QasmSimulator::rz(int q, double t) {
     const std::array<std::complex<double>, 4> m{epos, 0.0, 0.0, eneg};
     applySingleQubitGate(q, m);
     if (m_logOps)
-        m_ops.emplace_back("rz(" + std::to_string(t) + ") q[" + std::to_string(q) + "];\n");
+        operations_.push_back({OperationType::Rz, q, 0, t});
 }
 
 void QasmSimulator::cx(int control, int target) {
@@ -150,8 +150,7 @@ void QasmSimulator::cx(int control, int target) {
         }
     }
     if (m_logOps)
-        m_ops.emplace_back("cx q[" + std::to_string(control) + "],q[" + std::to_string(target) +
-                           "];\n");
+        operations_.push_back({OperationType::Cx, control, target, 0.0});
 }
 
 void QasmSimulator::reset(int q) {
@@ -194,7 +193,7 @@ void QasmSimulator::reset(int q) {
     }
 
     if (m_logOps)
-        m_ops.emplace_back("reset q[" + std::to_string(q) + "];\n");
+        operations_.push_back({OperationType::Reset, q, 0, 0.0});
 }
 
 int QasmSimulator::measure(int q) {
@@ -216,28 +215,94 @@ int QasmSimulator::measure(int q) {
             m_state[i] /= norm;
     }
     if (m_logOps)
-        m_ops.emplace_back("measure q[" + std::to_string(q) + "] -> c[" + std::to_string(q) +
-                           "];\n");
+        operations_.push_back({OperationType::Measure, q, 0, 0.0});
     if (q >= 0 && q < static_cast<int>(m_measured.size()))
         m_measured[q] = true;
     return res;
 }
 
-std::string QasmSimulator::getQasm() const {
-    const std::string header = "OPENQASM 2.0;\ninclude \"qelib1.inc\";\n";
-    const std::string qreg = "qreg q[" + std::to_string(m_qubits) + "];\n";
-    const std::string creg = "creg c[" + std::to_string(m_qubits) + "];\n";
-    size_t total = header.size() + qreg.size() + creg.size();
-    for (const auto& op : m_ops)
-        total += op.size();
-    std::string out;
-    out.reserve(total);
-    out.append(header);
-    out.append(qreg);
-    out.append(creg);
-    for (const auto& op : m_ops)
-        out.append(op);
-    return out;
+std::string QasmSimulator::getQasm(QasmVersion version) const {
+    std::string output;
+    output.reserve(96 + operations_.size() * 24);
+
+    if (version == QasmVersion::OpenQasm2) {
+        output.append("OPENQASM 2.0;\ninclude \"qelib1.inc\";\n");
+        if (m_qubits > 0) {
+            output.append("qreg q[").append(std::to_string(m_qubits));
+            output.append("];\ncreg c[").append(std::to_string(m_qubits)).append("];\n");
+        }
+    } else {
+        output.append("OPENQASM 3.0;\ninclude \"stdgates.inc\";\n");
+        if (m_qubits > 0) {
+            output.append("qubit[").append(std::to_string(m_qubits));
+            output.append("] q;\nbit[").append(std::to_string(m_qubits)).append("] c;\n");
+        }
+    }
+
+    const auto append_qubit = [&output](int qubit) {
+        output.append("q[").append(std::to_string(qubit)).append("]");
+    };
+    const auto append_gate = [&output, &append_qubit](std::string_view gate, int qubit) {
+        output.append(gate).append(" ");
+        append_qubit(qubit);
+        output.append(";\n");
+    };
+    const auto append_rotation = [&output, &append_qubit](std::string_view gate, int qubit,
+                                                          double angle) {
+        output.append(gate).append("(").append(std::to_string(angle)).append(") ");
+        append_qubit(qubit);
+        output.append(";\n");
+    };
+
+    for (const auto& operation : operations_) {
+        switch (operation.type) {
+            case OperationType::H:
+                append_gate("h", operation.first_qubit);
+                break;
+            case OperationType::X:
+                append_gate("x", operation.first_qubit);
+                break;
+            case OperationType::Y:
+                append_gate("y", operation.first_qubit);
+                break;
+            case OperationType::Z:
+                append_gate("z", operation.first_qubit);
+                break;
+            case OperationType::Rx:
+                append_rotation("rx", operation.first_qubit, operation.angle);
+                break;
+            case OperationType::Ry:
+                append_rotation("ry", operation.first_qubit, operation.angle);
+                break;
+            case OperationType::Rz:
+                append_rotation("rz", operation.first_qubit, operation.angle);
+                break;
+            case OperationType::Cx:
+                output.append("cx ");
+                append_qubit(operation.first_qubit);
+                output.append(",");
+                append_qubit(operation.second_qubit);
+                output.append(";\n");
+                break;
+            case OperationType::Reset:
+                append_gate("reset", operation.first_qubit);
+                break;
+            case OperationType::Measure:
+                if (version == QasmVersion::OpenQasm3) {
+                    output.append("c[").append(std::to_string(operation.first_qubit));
+                    output.append("] = measure ");
+                    append_qubit(operation.first_qubit);
+                    output.append(";\n");
+                } else {
+                    output.append("measure ");
+                    append_qubit(operation.first_qubit);
+                    output.append(" -> c[").append(std::to_string(operation.first_qubit));
+                    output.append("];\n");
+                }
+                break;
+        }
+    }
+    return output;
 }
 
 void QasmSimulator::ensureQubitActive(int q) const {

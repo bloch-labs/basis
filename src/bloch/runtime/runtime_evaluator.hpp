@@ -227,7 +227,9 @@ class RuntimeEvaluator {
     const std::unordered_map<const Expression*, std::vector<int>>& measurements() const {
         return m_measurements;
     }
-    std::string getQasm() const { return m_sim.getQasm(); }
+    std::string getQasm(QasmVersion version = QasmVersion::OpenQasm2) const {
+        return m_sim.getQasm(version);
+    }
     size_t heapObjectCount();
 
    private:

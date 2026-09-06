@@ -15,11 +15,13 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 
 #include "bloch/compiler/import/module_loader.hpp"
 #include "bloch/compiler/lexer/lexer.hpp"
 #include "bloch/compiler/parser/parser.hpp"
+#include "bloch/compiler/qasm/qasm3_emitter.hpp"
 #include "bloch/compiler/semantics/semantic_analyser.hpp"
 #include "bloch/runtime/qasm_simulator.hpp"
 #include "bloch/runtime/runtime_evaluator.hpp"
@@ -133,6 +135,32 @@ TEST(RuntimeTest, GeneratesQasm) {
     EXPECT_NE(qasm.find("OPENQASM 2.0"), std::string::npos);
     EXPECT_NE(qasm.find("h q[0]"), std::string::npos);
     EXPECT_NE(qasm.find("measure q[0]"), std::string::npos);
+
+    std::string qasm3 = eval.getQasm(QasmVersion::OpenQasm3);
+    EXPECT_NE(qasm3.find("OPENQASM 3.0"), std::string::npos);
+    EXPECT_NE(qasm3.find("include \"stdgates.inc\""), std::string::npos);
+    EXPECT_NE(qasm3.find("qubit[1] q"), std::string::npos);
+    EXPECT_NE(qasm3.find("bit[1] c"), std::string::npos);
+    EXPECT_NE(qasm3.find("c[0] = measure q[0]"), std::string::npos);
+}
+
+TEST(Qasm3EmitterTest, PreservesMeasurementDependentControlFlow) {
+    const auto example_path = std::filesystem::path(__FILE__).parent_path().parent_path() /
+                              "examples" / "11_dynamic_control.bloch";
+    std::ifstream example(example_path);
+    ASSERT_TRUE(example.is_open());
+    const std::string source{std::istreambuf_iterator<char>(example),
+                             std::istreambuf_iterator<char>()};
+    auto program = parseProgram(source.c_str());
+    SemanticAnalyser analyser;
+    analyser.analyse(*program);
+
+    EXPECT_TRUE(Qasm3Emitter::requires_structured_emission(*program));
+    std::string qasm = Qasm3Emitter{}.emit(*program);
+    EXPECT_NE(qasm.find("bit result = measure control;"), std::string::npos);
+    EXPECT_NE(qasm.find("if (result == 1) {"), std::string::npos);
+    EXPECT_NE(qasm.find("    x target;"), std::string::npos);
+    EXPECT_NE(qasm.find("} else {\n    h target;"), std::string::npos);
 }
 
 TEST(RuntimeTest, MultipleQubitDeclarationsAllocateDistinctQubits) {

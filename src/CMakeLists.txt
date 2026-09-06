@@ -6,6 +6,7 @@ add_library(
         bloch/compiler/import/module_loader.cpp
         bloch/compiler/lexer/lexer.cpp
         bloch/compiler/parser/parser.cpp
+        bloch/compiler/qasm/qasm3_emitter.cpp
         bloch/compiler/semantics/built_ins.cpp
         bloch/compiler/semantics/semantic_analyser.cpp
         bloch/compiler/semantics/type_system.cpp

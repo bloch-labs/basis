@@ -1,0 +1,15 @@
+function main() -> void {
+    qubit control;
+    qubit target;
+
+    h(control);
+    bit result = measure control;
+
+    if (result == 1b) {
+        x(target);
+    } else {
+        h(target);
+    }
+
+    bit measured_target = measure target;
+}

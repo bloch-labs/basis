@@ -23,6 +23,8 @@
 
 namespace bloch::runtime {
 
+enum class QasmVersion { OpenQasm2, OpenQasm3 };
+
 // An ideal statevector simulator with a QASM log.
 // TODO: performance optimisation post 1.0.0
 class QasmSimulator {
@@ -39,13 +41,22 @@ class QasmSimulator {
     void cx(int control, int target);
     void reset(int q);
     int measure(int q);
-    std::string getQasm() const;
+    std::string getQasm(QasmVersion version = QasmVersion::OpenQasm2) const;
     size_t stateSize() const { return m_state.size(); }
 
    private:
+    enum class OperationType { H, X, Y, Z, Rx, Ry, Rz, Cx, Reset, Measure };
+
+    struct Operation {
+        OperationType type;
+        int first_qubit;
+        int second_qubit;
+        double angle;
+    };
+
     int m_qubits = 0;
     std::vector<std::complex<double>> m_state{1};
-    std::vector<std::string> m_ops;
+    std::vector<Operation> operations_;
     bool m_logOps = true;
     std::vector<bool> m_measured;
 
