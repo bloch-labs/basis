@@ -1,6 +1,6 @@
-# Bloch C++ Style Guide
+# Bloch Basis C++ Style Guide
 
-This document defines the C++ conventions used by Bloch.
+This document defines the C++ conventions used by Bloch Basis.
 
 The goal is not to create an exhaustive set of rules. Code should be readable, predictable,
 safe and straightforward to maintain. Where this guide does not specify a convention, prefer
@@ -8,7 +8,7 @@ established modern C++ practices and consistency with the surrounding code.
 
 ## C++ version
 
-Bloch targets **C++20**.
+Bloch Basis targets **C++20**.
 
 Compiler-specific language extensions should not be used unless there is a clear portability
 reason for doing so.
@@ -309,8 +309,7 @@ Early returns are encouraged when they reduce nesting.
 
 ## Error handling
 
-Compiler and runtime errors caused by Bloch programs should use Bloch's diagnostic/error
-infrastructure.
+Compiler and runtime errors caused by Bloch Basis programs should use the diagnostic/error provided at `bloch/support/error/bloch_error.hpp`.
 
 Exceptions may be used for exceptional failure paths.
 
@@ -360,7 +359,7 @@ explicit Parser(std::vector<Token> tokens);
 
 ## CMake
 
-Bloch uses target-based CMake.
+Bloch Basis uses target-based CMake.
 
 Prefer:
 

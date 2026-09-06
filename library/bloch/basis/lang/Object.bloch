@@ -1,4 +1,4 @@
-package bloch.lang;
+package bloch.basis.lang;
 
 class Object {
     public constructor() -> Object = default;
@@ -8,6 +8,6 @@ class Object {
     }
 
     public virtual function toString() -> string {
-        return "bloch.lang.Object";
+        return "bloch.basis.lang.Object";
     }
 }
